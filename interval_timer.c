@@ -704,7 +704,7 @@ static void draw_menu(Canvas* canvas, App* app) {
 }
 
 static void draw_stopwatch(Canvas* canvas, App* app) {
-    char buf[24];
+    char buf[48];
 
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str_aligned(
@@ -719,7 +719,7 @@ static void draw_stopwatch(Canvas* canvas, App* app) {
         canvas_draw_str_aligned(canvas, 64, 51, AlignCenter, AlignBottom, "OK Start/Stopp  > Runde");
         canvas_draw_str_aligned(canvas, 64, 62, AlignCenter, AlignBottom, "< Reset (wenn gestoppt)");
     } else {
-        char t[20];
+        char t[24];
         format_stopwatch(t, sizeof(t), app->sw_lap_last_ms);
         snprintf(buf, sizeof(buf), "R%u  %s", (unsigned)app->sw_lap_count, t);
         canvas_draw_str_aligned(canvas, 4, 51, AlignLeft, AlignBottom, buf);
