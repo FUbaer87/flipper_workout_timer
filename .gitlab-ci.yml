@@ -1,0 +1,9 @@
+build-fap:
+  image: python:3.12
+  script:
+    - pip install ufbt
+    - ufbt
+  artifacts:
+    name: interval_timer
+    paths:
+      - dist/*.fap
