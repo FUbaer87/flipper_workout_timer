@@ -1,0 +1,11 @@
+App(
+    appid="interval_timer",
+    name="Intervall-Timer",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="interval_timer_app",
+    stack_size=4 * 1024,
+    fap_category="Tools",
+    fap_icon="interval_timer.png",
+    fap_version="1.0",
+    fap_description="Intervall-Timer mit Belastung, Pause und Runden (Ton, Vibration, LED)",
+)
