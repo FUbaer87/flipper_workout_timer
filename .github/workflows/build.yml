@@ -1,9 +1,27 @@
-build-fap:
-  image: python:3.12
-  script:
-    - pip install ufbt
-    - ufbt
-  artifacts:
-    name: interval_timer
-    paths:
-      - dist/*.fap
+name: Build FAP
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ufbt installieren
+        run: pip install ufbt
+
+      - name: FAP bauen
+        run: ufbt
+
+      - name: FAP hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: interval_timer
+          path: dist/*.fap
