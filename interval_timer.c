@@ -652,4 +652,483 @@ static void handle_input_menu(App* app, const InputEvent* event) {
         }
         break;
     case InputKeyBack:
-        app->exit = 
+        app->exit = true;
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_input_stopwatch(App* app, const InputEvent* event) {
+    bool repeat;
+    if(!is_action(app, event, &repeat) || repeat) return;
+
+    switch(event->key) {
+    case InputKeyOk:
+        stopwatch_toggle(app);
+        break;
+    case InputKeyRight:
+        stopwatch_lap(app);
+        break;
+    case InputKeyLeft:
+        if(!app->sw_running) stopwatch_reset(app);
+        break;
+    case InputKeyBack:
+        leave_to(app, ScreenMenu);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_input_countdown_setup(App* app, const InputEvent* event) {
+    bool repeat;
+    if(!is_action(app, event, &repeat)) return;
+
+    switch(event->key) {
+    case InputKeyLeft:
+        if(!repeat) app->cd_field = 0; /* minutes */
+        break;
+    case InputKeyRight:
+        if(!repeat) app->cd_field = 1; /* seconds */
+        break;
+    case InputKeyUp:
+        adjust_countdown(app, +1, repeat);
+        break;
+    case InputKeyDown:
+        adjust_countdown(app, -1, repeat);
+        break;
+    case InputKeyOk:
+        if(!repeat) start_run(app, true);
+        break;
+    case InputKeyBack:
+        if(!repeat) leave_to(app, ScreenMenu);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_input_interval_setup(App* app, const InputEvent* event) {
+    bool repeat;
+    if(!is_action(app, event, &repeat)) return;
+
+    switch(event->key) {
+    case InputKeyUp:
+        if(!repeat) app->field = (app->field + FieldCount - 1) % FieldCount;
+        break;
+    case InputKeyDown:
+        if(!repeat) app->field = (app->field + 1) % FieldCount;
+        break;
+    case InputKeyLeft:
+        adjust_field(app, -1, repeat);
+        break;
+    case InputKeyRight:
+        adjust_field(app, +1, repeat);
+        break;
+    case InputKeyOk:
+        if(!repeat) start_run(app, false);
+        break;
+    case InputKeyBack:
+        if(!repeat) leave_to(app, ScreenMenu);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_input_run(App* app, const InputEvent* event) {
+    bool repeat;
+    if(!is_action(app, event, &repeat) || repeat) return;
+
+    Screen back = app->is_timer ? ScreenCountdownSetup : ScreenIntervalSetup;
+
+    switch(event->key) {
+    case InputKeyOk:
+        if(app->phase == PhaseDone) {
+            leave_to(app, back);
+        } else {
+            app->paused = !app->paused;
+        }
+        break;
+    case InputKeyRight: /* skip to the next phase */
+        if(app->phase != PhaseDone && !app->is_timer) advance_phase(app);
+        break;
+    case InputKeyLeft: /* restart the current phase */
+        if(app->phase != PhaseDone) app->remaining = app->phase_total;
+        break;
+    case InputKeyBack:
+        leave_to(app, back);
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---------- Drawing ---------- */
+
+#define MENU_WIDTH 86
+
+static void draw_menu(Canvas* canvas, App* app) {
+    static const char* labels[MenuCount] = {
+        "Stopwatch", "Countdown", "Interval Timer", "Alert", "Volume"};
+
+    canvas_set_font(canvas, FontSecondary);
+    for(int i = 0; i < MenuCount; i++) {
+        int y = 2 + i * 12;
+        bool selected = (i == (int)app->menu_index);
+
+        if(selected) {
+            canvas_draw_box(canvas, 0, y, MENU_WIDTH, 12);
+            canvas_set_color(canvas, ColorWhite);
+        }
+
+        canvas_draw_str_aligned(canvas, 3, y + 10, AlignLeft, AlignBottom, labels[i]);
+        if(i == MenuAlert) {
+            uint16_t mode = app->settings.alarm < AlarmCount ? app->settings.alarm : AlarmBoth;
+            canvas_draw_str_aligned(
+                canvas, MENU_WIDTH - 3, y + 10, AlignRight, AlignBottom, alarm_names[mode]);
+        } else if(i == MenuVolume) {
+            uint16_t level = app->settings.volume < VolumeCount ? app->settings.volume : VolumeLoud;
+            canvas_draw_str_aligned(
+                canvas, MENU_WIDTH - 3, y + 10, AlignRight, AlignBottom, volume_names[level]);
+        }
+        if(selected) canvas_set_color(canvas, ColorBlack);
+    }
+
+    canvas_draw_xbm(canvas, 88, 12, DOLPHIN_WIDTH, DOLPHIN_HEIGHT, dolphin_bitmap);
+}
+
+static void draw_stopwatch(Canvas* canvas, App* app) {
+    char buf[48];
+
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 64, 0, AlignCenter, AlignTop, "STOPWATCH");
+
+    format_stopwatch(buf, sizeof(buf), stopwatch_elapsed(app));
+    canvas_set_font(canvas, FontBigNumbers);
+    canvas_draw_str_aligned(canvas, 64, 27, AlignCenter, AlignCenter, buf);
+
+    canvas_set_font(canvas, FontSecondary);
+    if(app->sw_lap_count == 0) {
+        canvas_draw_str_aligned(canvas, 64, 51, AlignCenter, AlignBottom, "OK start/stop   > lap");
+        canvas_draw_str_aligned(canvas, 64, 62, AlignCenter, AlignBottom, "< reset (when stopped)");
+    } else {
+        char t[24];
+        format_stopwatch(t, sizeof(t), app->sw_lap_last_ms);
+        snprintf(buf, sizeof(buf), "L%u  %s", (unsigned)app->sw_lap_count, t);
+        canvas_draw_str_aligned(canvas, 4, 51, AlignLeft, AlignBottom, buf);
+        if(app->sw_lap_count > 1) {
+            format_stopwatch(t, sizeof(t), app->sw_lap_prev_ms);
+            snprintf(buf, sizeof(buf), "L%u  %s", (unsigned)(app->sw_lap_count - 1), t);
+            canvas_draw_str_aligned(canvas, 4, 62, AlignLeft, AlignBottom, buf);
+        }
+    }
+}
+
+/* Two digits; the active field gets a dark box with white digits */
+static void draw_countdown_field(Canvas* canvas, int center_x, uint32_t value, bool active) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%02lu", (unsigned long)value);
+
+    if(active) {
+        canvas_draw_box(canvas, center_x - 22, 15, 44, 24);
+        canvas_set_color(canvas, ColorWhite);
+    }
+    canvas_set_font(canvas, FontBigNumbers);
+    canvas_draw_str_aligned(canvas, center_x, 27, AlignCenter, AlignCenter, buf);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void draw_countdown_setup(Canvas* canvas, App* app) {
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 64, 0, AlignCenter, AlignTop, "Countdown");
+
+    draw_countdown_field(canvas, 36, app->settings.timer / 60, app->cd_field == 0);
+    canvas_set_font(canvas, FontBigNumbers);
+    canvas_draw_str_aligned(canvas, 64, 26, AlignCenter, AlignCenter, ":");
+    draw_countdown_field(canvas, 92, app->settings.timer % 60, app->cd_field == 1);
+
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, 64, 52, AlignCenter, AlignBottom, "< > min/sec   ^ v change");
+    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, "OK = Start");
+}
+
+static void draw_interval_setup(Canvas* canvas, App* app) {
+    static const char* labels[FieldCount] = {"Prep", "Work", "Rest", "Rounds"};
+    char buf[24];
+
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 64, 0, AlignCenter, AlignTop, "Interval Timer");
+
+    canvas_set_font(canvas, FontSecondary);
+    for(int i = 0; i < FieldCount; i++) {
+        int y = 13 + i * 10;
+        bool selected = (i == (int)app->field);
+
+        int32_t min, max;
+        uint16_t value = *field_value(app, (Field)i, &min, &max);
+        if(i == FieldRounds) {
+            if(value == 0) {
+                snprintf(buf, sizeof(buf), "Endless");
+            } else {
+                snprintf(buf, sizeof(buf), "%u", (unsigned)value);
+            }
+        } else {
+            format_time(buf, sizeof(buf), value);
+        }
+
+        if(selected) {
+            canvas_draw_box(canvas, 0, y, 128, 10);
+            canvas_set_color(canvas, ColorWhite);
+        }
+
+        canvas_draw_str_aligned(canvas, 4, y + 9, AlignLeft, AlignBottom, labels[i]);
+        canvas_draw_str_aligned(canvas, 100, y + 9, AlignCenter, AlignBottom, buf);
+        if(selected) {
+            canvas_draw_str_aligned(canvas, 76, y + 9, AlignLeft, AlignBottom, "<");
+            canvas_draw_str_aligned(canvas, 124, y + 9, AlignRight, AlignBottom, ">");
+            canvas_set_color(canvas, ColorBlack);
+        }
+    }
+
+    RunParams r = {
+        .prep = app->settings.prep,
+        .work = app->settings.work,
+        .rest = app->settings.rest,
+        .rounds = app->settings.rounds};
+    canvas_draw_str_aligned(canvas, 2, 63, AlignLeft, AlignBottom, "OK=Start");
+    char total[32];
+    if(r.rounds == 0) {
+        snprintf(total, sizeof(total), "Total endless");
+    } else {
+        format_time(buf, sizeof(buf), total_seconds(&r));
+        snprintf(total, sizeof(total), "Total %s", buf);
+    }
+    canvas_draw_str_aligned(canvas, 126, 63, AlignRight, AlignBottom, total);
+}
+
+/* Cell at the top with label and time; the active one is inverted */
+static void draw_cell(Canvas* canvas, int x, const char* label, const char* value, bool active) {
+    if(active) {
+        canvas_draw_box(canvas, x, 0, 63, 20);
+        canvas_set_color(canvas, ColorWhite);
+    } else {
+        canvas_draw_frame(canvas, x, 0, 63, 20);
+    }
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, x + 31, 2, AlignCenter, AlignTop, label);
+    canvas_draw_str_aligned(canvas, x + 31, 11, AlignCenter, AlignTop, value);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void draw_done(Canvas* canvas, App* app) {
+    char buf[48];
+
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 64, 14, AlignCenter, AlignCenter, "DONE!");
+    canvas_set_font(canvas, FontSecondary);
+    if(app->is_timer) {
+        canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignCenter, "Time's up");
+        format_time(buf, sizeof(buf), app->run.work);
+    } else {
+        snprintf(buf, sizeof(buf), "%u rounds", (unsigned)app->run.rounds);
+        canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignCenter, buf);
+        format_time(buf, sizeof(buf), total_seconds(&app->run));
+    }
+    canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignCenter, buf);
+    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, "OK = Back");
+}
+
+static void draw_progress(Canvas* canvas, App* app) {
+    canvas_draw_frame(canvas, 4, 45, 120, 6);
+    if(app->phase_total > 0) {
+        uint32_t elapsed = app->phase_total - app->remaining;
+        uint32_t width = (116UL * elapsed) / app->phase_total;
+        if(width > 0) canvas_draw_box(canvas, 6, 47, width, 2);
+    }
+}
+
+static void draw_run_countdown(Canvas* canvas, App* app) {
+    char buf[24];
+
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 64, 1, AlignCenter, AlignTop, "COUNTDOWN");
+
+    format_time(buf, sizeof(buf), app->remaining);
+    canvas_set_font(canvas, FontBigNumbers);
+    canvas_draw_str_aligned(canvas, 64, 29, AlignCenter, AlignCenter, buf);
+
+    draw_progress(canvas, app);
+
+    if(app->paused) {
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(canvas, 126, 63, AlignRight, AlignBottom, "PAUSED");
+    }
+}
+
+/* Interval view, Gymboss style: Work, Rest and Round at a glance */
+static void draw_run_interval(Canvas* canvas, App* app) {
+    char buf[48];
+
+    format_time(buf, sizeof(buf), app->run.work);
+    draw_cell(canvas, 0, "WORK", buf, app->phase == PhaseWork);
+
+    if(app->run.rest > 0) {
+        format_time(buf, sizeof(buf), app->run.rest);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    draw_cell(canvas, 65, "REST", buf, app->phase == PhaseRest);
+
+    /* remaining time of the current phase */
+    format_time(buf, sizeof(buf), app->remaining);
+    canvas_set_font(canvas, FontBigNumbers);
+    canvas_draw_str_aligned(canvas, 64, 33, AlignCenter, AlignCenter, buf);
+
+    draw_progress(canvas, app);
+
+    /* round at the bottom left, status at the bottom right */
+    canvas_set_font(canvas, FontPrimary);
+    if(app->phase == PhasePrep) {
+        snprintf(buf, sizeof(buf), "Get ready");
+    } else if(app->run.rounds == 0) {
+        snprintf(buf, sizeof(buf), "Round %u", (unsigned)app->round);
+    } else {
+        snprintf(buf, sizeof(buf), "Round %u/%u", (unsigned)app->round, (unsigned)app->run.rounds);
+    }
+    canvas_draw_str_aligned(canvas, 2, 63, AlignLeft, AlignBottom, buf);
+
+    if(app->paused) {
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(canvas, 126, 63, AlignRight, AlignBottom, "PAUSED");
+    }
+}
+
+static void draw_run(Canvas* canvas, App* app) {
+    if(app->phase == PhaseDone) {
+        draw_done(canvas, app);
+    } else if(app->is_timer) {
+        draw_run_countdown(canvas, app);
+    } else {
+        draw_run_interval(canvas, app);
+    }
+}
+
+static void draw_callback(Canvas* canvas, void* context) {
+    App* app = context;
+    if(furi_mutex_acquire(app->mutex, 200) != FuriStatusOk) return;
+
+    canvas_clear(canvas);
+    canvas_set_color(canvas, ColorBlack);
+
+    switch(app->screen) {
+    case ScreenMenu:
+        draw_menu(canvas, app);
+        break;
+    case ScreenStopwatch:
+        draw_stopwatch(canvas, app);
+        break;
+    case ScreenCountdownSetup:
+        draw_countdown_setup(canvas, app);
+        break;
+    case ScreenIntervalSetup:
+        draw_interval_setup(canvas, app);
+        break;
+    case ScreenRun:
+        draw_run(canvas, app);
+        break;
+    }
+
+    furi_mutex_release(app->mutex);
+}
+
+/* ---------- Callbacks for input and timer ---------- */
+
+static void input_callback(InputEvent* input_event, void* context) {
+    App* app = context;
+    AppEvent event = {.type = EventTypeInput, .input = *input_event};
+    furi_message_queue_put(app->queue, &event, FuriWaitForever);
+}
+
+static void timer_callback(void* context) {
+    App* app = context;
+    AppEvent event = {.type = EventTypeTick};
+    furi_message_queue_put(app->queue, &event, 0);
+}
+
+/* ---------- Entry point ---------- */
+
+int32_t interval_timer_app(void* p) {
+    UNUSED(p);
+
+    App* app = malloc(sizeof(App));
+    memset(app, 0, sizeof(App));
+
+    settings_load(&app->settings);
+    apply_volume(app);
+    app->screen = ScreenMenu;
+    app->field = FieldWork;
+    app->cd_field = 0;
+    app->phase = PhaseDone;
+
+    app->queue = furi_message_queue_alloc(8, sizeof(AppEvent));
+    app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    app->timer = furi_timer_alloc(timer_callback, FuriTimerTypePeriodic, app);
+    app->notifications = furi_record_open(RECORD_NOTIFICATION);
+
+    app->view_port = view_port_alloc();
+    view_port_draw_callback_set(app->view_port, draw_callback, app);
+    view_port_input_callback_set(app->view_port, input_callback, app);
+
+    app->gui = furi_record_open(RECORD_GUI);
+    gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
+
+    AppEvent event;
+    while(!app->exit) {
+        if(furi_message_queue_get(app->queue, &event, FuriWaitForever) != FuriStatusOk) continue;
+
+        furi_mutex_acquire(app->mutex, FuriWaitForever);
+        if(event.type == EventTypeTick) {
+            handle_tick(app);
+        } else if(event.type == EventTypeInput) {
+            switch(app->screen) {
+            case ScreenMenu:
+                handle_input_menu(app, &event.input);
+                break;
+            case ScreenStopwatch:
+                handle_input_stopwatch(app, &event.input);
+                break;
+            case ScreenCountdownSetup:
+                handle_input_countdown_setup(app, &event.input);
+                break;
+            case ScreenIntervalSetup:
+                handle_input_interval_setup(app, &event.input);
+                break;
+            case ScreenRun:
+                handle_input_run(app, &event.input);
+                break;
+            }
+        }
+        furi_mutex_release(app->mutex);
+
+        view_port_update(app->view_port);
+    }
+
+    /* Clean up */
+    furi_timer_stop(app->timer);
+    settings_save(&app->settings);
+    notification_message(app->notifications, &seq_off);
+    keep_awake(app, false);
+
+    gui_remove_view_port(app->gui, app->view_port);
+    furi_record_close(RECORD_GUI);
+    furi_record_close(RECORD_NOTIFICATION);
+    view_port_free(app->view_port);
+    furi_timer_free(app->timer);
+    furi_mutex_free(app->mutex);
+    furi_message_queue_free(app->queue);
+    free(app);
+
+    return 0;
+}
