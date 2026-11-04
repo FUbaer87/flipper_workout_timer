@@ -1,8 +1,7 @@
 /*
  * Workout Timer for the Flipper Zero
  *
- *  - Stopwatch (with lap times)
- *  - Countdown (minutes and seconds, set one field at a time)
+ *  - Countdown (minutes and seconds, set one field at a time; 0 = counts up)
  *  - Interval timer, Gymboss style: Work / Rest times, rounds (0 rounds = endless)
  *  - Alert: vibration, beep or both; beep volume: off, quiet or loud
  *  - LED: short colored flash per phase, red flash in the last three seconds
@@ -21,6 +20,7 @@
 
 #include "dolphin_bitmap.h"
 #include "dolphin_big_bitmap.h"
+#include "dolphin_art_bitmaps.h"
 
 #define TAG "WorkoutTimer"
 
@@ -35,7 +35,7 @@
 #define REST_MAX   5940
 #define ROUNDS_MIN 0 /* 0 = endless */
 #define ROUNDS_MAX 99
-#define TIMER_MIN  1
+#define TIMER_MIN  0 /* 0 = count up */
 #define TIMER_MAX  5999 /* 99:59 */
 
 /* ---------- Types ---------- */
@@ -57,10 +57,9 @@ typedef enum {
 } VolumeLevel;
 
 static const char* volume_names[VolumeCount] = {"Off", "Quiet", "Loud"};
-static const float volume_values[VolumeCount] = {0.0f, 0.1f, 1.0f};
+static const float volume_values[VolumeCount] = {0.0f, 0.25f, 1.0f};
 
 typedef enum {
-    MenuStopwatch,
     MenuCountdown,
     MenuInterval,
     MenuAlert,
@@ -78,7 +77,6 @@ typedef enum {
 
 typedef enum {
     ScreenMenu,
-    ScreenStopwatch,
     ScreenCountdownSetup,
     ScreenIntervalSetup,
     ScreenRun,
@@ -156,14 +154,7 @@ typedef struct {
     uint16_t round;
     bool paused;
 
-    /* Stopwatch */
-    bool sw_running;
-    uint32_t sw_start_tick;
-    uint32_t sw_accum_ms;
-    uint32_t sw_lap_total_ms;
-    uint32_t sw_lap_last_ms;
-    uint32_t sw_lap_prev_ms;
-    uint16_t sw_lap_count;
+    bool count_up; /* countdown set to 0 counts upward */
 
     bool exit;
 } App;
@@ -303,7 +294,7 @@ static void settings_defaults(Settings* s) {
 static bool settings_valid(const Settings* s) {
     return s->magic == SETTINGS_MAGIC && s->prep <= PREP_MAX && s->work >= WORK_MIN &&
            s->work <= WORK_MAX && s->rest <= REST_MAX && s->rounds <= ROUNDS_MAX &&
-           s->timer >= TIMER_MIN && s->timer <= TIMER_MAX && s->alarm < AlarmCount &&
+           s->timer <= TIMER_MAX && s->alarm < AlarmCount &&
            s->volume < VolumeCount;
 }
 
@@ -358,25 +349,6 @@ static void format_time(char* buf, size_t size, uint32_t secs) {
             (unsigned long)(secs % 60));
     } else {
         snprintf(buf, size, "%02lu:%02lu", (unsigned long)(secs / 60), (unsigned long)(secs % 60));
-    }
-}
-
-static void format_stopwatch(char* buf, size_t size, uint32_t ms) {
-    uint32_t total_s = ms / 1000;
-    uint32_t tenth = (ms % 1000) / 100;
-    uint32_t h = total_s / 3600;
-    uint32_t m = (total_s / 60) % 60;
-    uint32_t s = total_s % 60;
-    if(h > 0) {
-        snprintf(buf, size, "%lu:%02lu:%02lu", (unsigned long)h, (unsigned long)m, (unsigned long)s);
-    } else {
-        snprintf(
-            buf,
-            size,
-            "%02lu:%02lu.%lu",
-            (unsigned long)m,
-            (unsigned long)s,
-            (unsigned long)tenth);
     }
 }
 
@@ -448,12 +420,6 @@ static void change_volume(App* app, int32_t direction) {
     signal_play(app, SigTest);
 }
 
-static uint32_t stopwatch_elapsed(const App* app) {
-    uint32_t ms = app->sw_accum_ms;
-    if(app->sw_running) ms += furi_get_tick() - app->sw_start_tick;
-    return ms;
-}
-
 /* ---------- Run control (countdown / interval) ---------- */
 
 static void enter_phase(App* app, Phase phase) {
@@ -514,6 +480,7 @@ static void start_run(App* app, bool is_timer) {
     settings_save(&app->settings);
 
     app->is_timer = is_timer;
+    app->count_up = is_timer && app->settings.timer == 0;
     if(is_timer) {
         app->run = (RunParams){.prep = 0, .work = app->settings.timer, .rest = 0, .rounds = 1};
     } else {
@@ -543,7 +510,6 @@ static void leave_to(App* app, Screen screen) {
     furi_timer_stop(app->timer);
     app->screen = screen;
     app->paused = false;
-    app->sw_running = false;
     notification_message(app->notifications, &seq_off);
     keep_awake(app, false);
     settings_save(&app->settings);
@@ -552,6 +518,11 @@ static void leave_to(App* app, Screen screen) {
 static void handle_tick(App* app) {
     if(app->screen != ScreenRun || app->paused || app->phase == PhaseDone) return;
 
+    if(app->count_up) {
+        if(app->remaining < TIMER_MAX) app->remaining++;
+        return;
+    }
+
     if(app->remaining > 0) app->remaining--;
 
     if(app->remaining == 0) {
@@ -559,40 +530,6 @@ static void handle_tick(App* app) {
     } else if(app->remaining <= 3) {
         signal_play(app, SigTick);
     }
-}
-
-/* ---------- Stopwatch ---------- */
-
-static void stopwatch_reset(App* app) {
-    app->sw_running = false;
-    app->sw_accum_ms = 0;
-    app->sw_lap_total_ms = 0;
-    app->sw_lap_last_ms = 0;
-    app->sw_lap_prev_ms = 0;
-    app->sw_lap_count = 0;
-}
-
-static void stopwatch_toggle(App* app) {
-    if(app->sw_running) {
-        app->sw_accum_ms = stopwatch_elapsed(app);
-        app->sw_running = false;
-        furi_timer_stop(app->timer);
-        keep_awake(app, false);
-    } else {
-        app->sw_start_tick = furi_get_tick();
-        app->sw_running = true;
-        furi_timer_start(app->timer, furi_kernel_get_tick_frequency() / 10);
-        keep_awake(app, true);
-    }
-}
-
-static void stopwatch_lap(App* app) {
-    if(!app->sw_running) return;
-    uint32_t now = stopwatch_elapsed(app);
-    app->sw_lap_prev_ms = app->sw_lap_last_ms;
-    app->sw_lap_last_ms = now - app->sw_lap_total_ms;
-    app->sw_lap_total_ms = now;
-    if(app->sw_lap_count < 999) app->sw_lap_count++;
 }
 
 /* ---------- Input ---------- */
@@ -634,10 +571,6 @@ static void handle_input_menu(App* app, const InputEvent* event) {
         break;
     case InputKeyOk:
         switch(app->menu_index) {
-        case MenuStopwatch:
-            stopwatch_reset(app);
-            app->screen = ScreenStopwatch;
-            break;
         case MenuCountdown:
             app->screen = ScreenCountdownSetup;
             break;
@@ -654,32 +587,6 @@ static void handle_input_menu(App* app, const InputEvent* event) {
         break;
     case InputKeyBack:
         app->exit = true;
-        break;
-    default:
-        break;
-    }
-}
-
-static void handle_input_stopwatch(App* app, const InputEvent* event) {
-    bool repeat;
-    if(!is_action(app, event, &repeat) || repeat) return;
-
-    switch(event->key) {
-    case InputKeyOk:
-        stopwatch_toggle(app);
-        break;
-    case InputKeyRight:
-        if(app->sw_running) {
-            stopwatch_lap(app);
-        } else {
-            stopwatch_reset(app);
-        }
-        break;
-    case InputKeyLeft:
-        if(!app->sw_running) stopwatch_reset(app);
-        break;
-    case InputKeyBack:
-        leave_to(app, ScreenMenu);
         break;
     default:
         break;
@@ -775,28 +682,27 @@ static void handle_input_run(App* app, const InputEvent* event) {
 #define MENU_WIDTH 86
 
 static void draw_menu(Canvas* canvas, App* app) {
-    static const char* labels[MenuCount] = {
-        "Stopwatch", "Countdown", "Interval Timer", "Alert", "Volume"};
+    static const char* labels[MenuCount] = {"Countdown", "Interval Timer", "Alert", "Volume"};
 
     canvas_set_font(canvas, FontSecondary);
     for(int i = 0; i < MenuCount; i++) {
-        int y = 2 + i * 12;
+        int y = 4 + i * 14;
         bool selected = (i == (int)app->menu_index);
 
         if(selected) {
-            canvas_draw_box(canvas, 0, y, MENU_WIDTH, 12);
+            canvas_draw_box(canvas, 0, y, MENU_WIDTH, 14);
             canvas_set_color(canvas, ColorWhite);
         }
 
-        canvas_draw_str_aligned(canvas, 3, y + 10, AlignLeft, AlignBottom, labels[i]);
+        canvas_draw_str_aligned(canvas, 3, y + 11, AlignLeft, AlignBottom, labels[i]);
         if(i == MenuAlert) {
             uint16_t mode = app->settings.alarm < AlarmCount ? app->settings.alarm : AlarmBoth;
             canvas_draw_str_aligned(
-                canvas, MENU_WIDTH - 3, y + 10, AlignRight, AlignBottom, alarm_names[mode]);
+                canvas, MENU_WIDTH - 3, y + 11, AlignRight, AlignBottom, alarm_names[mode]);
         } else if(i == MenuVolume) {
             uint16_t level = app->settings.volume < VolumeCount ? app->settings.volume : VolumeLoud;
             canvas_draw_str_aligned(
-                canvas, MENU_WIDTH - 3, y + 10, AlignRight, AlignBottom, volume_names[level]);
+                canvas, MENU_WIDTH - 3, y + 11, AlignRight, AlignBottom, volume_names[level]);
         }
         if(selected) canvas_set_color(canvas, ColorBlack);
     }
@@ -873,33 +779,13 @@ static void draw_widget_arrows(Canvas* canvas, int box_x) {
     canvas_draw_dot(canvas, cx, 51);
 }
 
-static void draw_stopwatch(Canvas* canvas, App* app) {
-    char buf[48];
-    char t[24];
-    uint32_t total_s = stopwatch_elapsed(app) / 1000;
-
-    draw_widget_base(canvas, "Stopwatch");
-    draw_widget_box(canvas, 64, total_s / 60, false);
-    draw_widget_colon(canvas);
-    draw_widget_box(canvas, 100, total_s % 60, false);
-
-    if(app->sw_lap_count > 0) {
-        format_stopwatch(t, sizeof(t), app->sw_lap_last_ms);
-        snprintf(buf, sizeof(buf), "L%u %s", (unsigned)app->sw_lap_count, t);
-        draw_widget_hint(canvas, buf);
-    } else {
-        draw_widget_hint(canvas, app->sw_running ? "> Lap" : "> Reset");
-    }
-    draw_widget_button(canvas, app->sw_running ? "OK Stop" : "OK Start");
-}
-
 static void draw_countdown_setup(Canvas* canvas, App* app) {
     draw_widget_base(canvas, "Countdown");
     draw_widget_box(canvas, 64, app->settings.timer / 60, app->cd_field == 0);
     draw_widget_colon(canvas);
     draw_widget_box(canvas, 100, app->settings.timer % 60, app->cd_field == 1);
     draw_widget_arrows(canvas, app->cd_field == 0 ? 64 : 100);
-    draw_widget_hint(canvas, "< > min/sec");
+    draw_widget_hint(canvas, app->settings.timer == 0 ? "0 = count up" : "< > min/sec");
     draw_widget_button(canvas, "OK Start");
 }
 
@@ -957,107 +843,126 @@ static void draw_interval_setup(Canvas* canvas, App* app) {
     canvas_draw_str_aligned(canvas, 126, 63, AlignRight, AlignBottom, total);
 }
 
-/* Cell at the top with label and time; the active one is inverted */
-static void draw_cell(Canvas* canvas, int x, const char* label, const char* value, bool active) {
-    if(active) {
-        canvas_draw_box(canvas, x, 0, 63, 20);
-        canvas_set_color(canvas, ColorWhite);
-    } else {
-        canvas_draw_frame(canvas, x, 0, 63, 20);
-    }
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, x + 31, 2, AlignCenter, AlignTop, label);
-    canvas_draw_str_aligned(canvas, x + 31, 11, AlignCenter, AlignTop, value);
-    canvas_set_color(canvas, ColorBlack);
-}
-
-static void draw_done(Canvas* canvas, App* app) {
-    char buf[48];
-
-    canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 64, 14, AlignCenter, AlignCenter, "DONE!");
-    canvas_set_font(canvas, FontSecondary);
-    snprintf(buf, sizeof(buf), "%u rounds", (unsigned)app->run.rounds);
-    canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignCenter, buf);
-    format_time(buf, sizeof(buf), total_seconds(&app->run));
-    canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignCenter, buf);
-    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, "OK = Back");
-}
-
-static void draw_progress(Canvas* canvas, App* app) {
-    canvas_draw_frame(canvas, 4, 45, 120, 6);
-    if(app->phase_total > 0) {
-        uint32_t elapsed = app->phase_total - app->remaining;
-        uint32_t width = (116UL * elapsed) / app->phase_total;
-        if(width > 0) canvas_draw_box(canvas, 6, 47, width, 2);
-    }
-}
-
 static void draw_run_countdown(Canvas* canvas, App* app) {
     bool done = (app->phase == PhaseDone);
 
-    draw_widget_base(canvas, done ? "Time's up!" : "Countdown");
+    draw_widget_base(canvas, done ? "Time's up!" : (app->count_up ? "Count up" : "Countdown"));
     draw_widget_box(canvas, 64, app->remaining / 60, false);
     draw_widget_colon(canvas);
     draw_widget_box(canvas, 100, app->remaining % 60, false);
-
-    if(!done) {
-        /* progress bar under the boxes */
-        canvas_draw_frame(canvas, 64, 48, 64, 3);
-        if(app->phase_total > 0) {
-            uint32_t elapsed = app->phase_total - app->remaining;
-            uint32_t width = (60UL * elapsed) / app->phase_total;
-            if(width > 0) canvas_draw_box(canvas, 66, 49, width, 1);
-        }
-    }
-
-    if(app->paused) draw_widget_hint(canvas, "PAUSED");
     draw_widget_button(canvas, done ? "OK Back" : (app->paused ? "OK Resume" : "OK Pause"));
 }
 
-/* Interval view, Gymboss style: Work, Rest and Round at a glance */
+/* Text of the next phase for the button: name and duration */
+static void next_phase_text(const App* app, char* buf, size_t size) {
+    bool last = (app->run.rounds != 0 && app->round >= app->run.rounds);
+    char t[16];
+
+    switch(app->phase) {
+    case PhasePrep:
+    case PhaseRest:
+        format_time(t, sizeof(t), app->run.work);
+        snprintf(buf, size, "Work %s", t);
+        break;
+    case PhaseWork:
+        if(last) {
+            snprintf(buf, size, "Done");
+        } else if(app->run.rest > 0) {
+            format_time(t, sizeof(t), app->run.rest);
+            snprintf(buf, size, "Rest %s", t);
+        } else {
+            format_time(t, sizeof(t), app->run.work);
+            snprintf(buf, size, "Work %s", t);
+        }
+        break;
+    default:
+        snprintf(buf, size, "Back");
+        break;
+    }
+}
+
+/* Dark button at the bottom right with a small arrow */
+static void draw_next_button(Canvas* canvas, const char* text) {
+    canvas_set_font(canvas, FontSecondary);
+    int w = canvas_string_width(canvas, text) + 14;
+    int x = 128 - w;
+    canvas_draw_rbox(canvas, x, 52, w, 12, 2);
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_str_aligned(canvas, x + 4, 58, AlignLeft, AlignCenter, text);
+    canvas_draw_line(canvas, 121, 55, 121, 61);
+    canvas_draw_line(canvas, 122, 56, 122, 60);
+    canvas_draw_line(canvas, 123, 57, 123, 59);
+    canvas_draw_dot(canvas, 124, 58);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+/* Interval view: dolphin working out (Prep, Work) or resting (Rest, Done),
+ * title, big time box (dark while paused), round and the next phase */
 static void draw_run_interval(Canvas* canvas, App* app) {
     char buf[48];
+    bool done = (app->phase == PhaseDone);
+    bool working = (app->phase == PhasePrep || app->phase == PhaseWork);
 
-    format_time(buf, sizeof(buf), app->run.work);
-    draw_cell(canvas, 0, "WORK", buf, app->phase == PhaseWork);
+    canvas_draw_xbm(
+        canvas,
+        1,
+        3,
+        DOLPHIN_ART_WIDTH,
+        DOLPHIN_ART_HEIGHT,
+        working ? dolphin_work_bitmap : dolphin_rest_bitmap);
 
-    if(app->run.rest > 0) {
-        format_time(buf, sizeof(buf), app->run.rest);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    draw_cell(canvas, 65, "REST", buf, app->phase == PhaseRest);
-
-    /* remaining time of the current phase */
-    format_time(buf, sizeof(buf), app->remaining);
-    canvas_set_font(canvas, FontBigNumbers);
-    canvas_draw_str_aligned(canvas, 64, 33, AlignCenter, AlignCenter, buf);
-
-    draw_progress(canvas, app);
-
-    /* round at the bottom left, status at the bottom right */
-    canvas_set_font(canvas, FontPrimary);
+    const char* title = "Done!";
     if(app->phase == PhasePrep) {
-        snprintf(buf, sizeof(buf), "Get ready");
+        title = "Get ready:";
+    } else if(app->phase == PhaseWork) {
+        title = "Work for:";
+    } else if(app->phase == PhaseRest) {
+        title = "Rest for:";
+    }
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 127, 1, AlignRight, AlignTop, title);
+
+    uint32_t shown = done ? total_seconds(&app->run) : app->remaining;
+    if(shown >= 6000) {
+        snprintf(buf, sizeof(buf), "--:--");
+    } else {
+        format_time(buf, sizeof(buf), shown);
+    }
+    if(app->paused) {
+        canvas_draw_rbox(canvas, 62, 14, 66, 26, 3);
+        canvas_set_color(canvas, ColorWhite);
+    } else {
+        canvas_draw_rframe(canvas, 62, 14, 66, 26, 3);
+    }
+    canvas_set_font(canvas, FontBigNumbers);
+    canvas_draw_str_aligned(canvas, 95, 27, AlignCenter, AlignCenter, buf);
+    canvas_set_color(canvas, ColorBlack);
+
+    if(done || app->phase == PhasePrep) {
+        if(app->run.rounds == 0) {
+            snprintf(buf, sizeof(buf), "Endless");
+        } else {
+            snprintf(buf, sizeof(buf), "%u rounds", (unsigned)app->run.rounds);
+        }
     } else if(app->run.rounds == 0) {
         snprintf(buf, sizeof(buf), "Round %u", (unsigned)app->round);
     } else {
         snprintf(buf, sizeof(buf), "Round %u/%u", (unsigned)app->round, (unsigned)app->run.rounds);
     }
-    canvas_draw_str_aligned(canvas, 2, 63, AlignLeft, AlignBottom, buf);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, 64, 50, AlignLeft, AlignBottom, buf);
 
-    if(app->paused) {
-        canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str_aligned(canvas, 126, 63, AlignRight, AlignBottom, "PAUSED");
+    if(done) {
+        draw_widget_button(canvas, "OK Back");
+    } else {
+        next_phase_text(app, buf, sizeof(buf));
+        draw_next_button(canvas, buf);
     }
 }
 
 static void draw_run(Canvas* canvas, App* app) {
     if(app->is_timer) {
         draw_run_countdown(canvas, app);
-    } else if(app->phase == PhaseDone) {
-        draw_done(canvas, app);
     } else {
         draw_run_interval(canvas, app);
     }
@@ -1073,9 +978,6 @@ static void draw_callback(Canvas* canvas, void* context) {
     switch(app->screen) {
     case ScreenMenu:
         draw_menu(canvas, app);
-        break;
-    case ScreenStopwatch:
-        draw_stopwatch(canvas, app);
         break;
     case ScreenCountdownSetup:
         draw_countdown_setup(canvas, app);
@@ -1143,9 +1045,6 @@ int32_t interval_timer_app(void* p) {
             switch(app->screen) {
             case ScreenMenu:
                 handle_input_menu(app, &event.input);
-                break;
-            case ScreenStopwatch:
-                handle_input_stopwatch(app, &event.input);
                 break;
             case ScreenCountdownSetup:
                 handle_input_countdown_setup(app, &event.input);
