@@ -3,9 +3,9 @@ App(
     name="Workout Timer",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="interval_timer_app",
-    stack_size=4 * 1024,
+    stack_size=8 * 1024,
     fap_category="Tools",
     fap_icon="interval_timer.png",
-    fap_version="1.1",
+    fap_version="1.2",
     fap_description="Workout timer: stopwatch, countdown and interval timer with beep, vibration and LED",
 )

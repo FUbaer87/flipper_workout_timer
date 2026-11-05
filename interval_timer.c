@@ -153,6 +153,8 @@ typedef struct {
     uint16_t phase_total;
     uint16_t round;
     bool paused;
+    bool stop_timer;
+    int8_t pending_signal;
 
     bool count_up; /* countdown set to 0 counts upward */
 
@@ -267,7 +269,15 @@ static uint8_t signal_variant(const App* app) {
     return 3;
 }
 
+/* Only remember the signal; it is played by the main loop after the mutex is released */
 static void signal_play(App* app, Signal sig) {
+    app->pending_signal = (int8_t)sig;
+}
+
+static void signal_flush(App* app) {
+    if(app->pending_signal < 0) return;
+    Signal sig = (Signal)app->pending_signal;
+    app->pending_signal = -1;
     notification_message(app->notifications, signals[sig][signal_variant(app)]);
 }
 
@@ -441,7 +451,7 @@ static void enter_phase(App* app, Phase phase) {
         break;
     case PhaseDone:
         app->remaining = 0;
-        furi_timer_stop(app->timer);
+        app->stop_timer = true;
         signal_play(app, SigDone);
         break;
     }
@@ -998,7 +1008,7 @@ static void draw_callback(Canvas* canvas, void* context) {
 static void input_callback(InputEvent* input_event, void* context) {
     App* app = context;
     AppEvent event = {.type = EventTypeInput, .input = *input_event};
-    furi_message_queue_put(app->queue, &event, FuriWaitForever);
+    furi_message_queue_put(app->queue, &event, 20);
 }
 
 static void timer_callback(void* context) {
@@ -1021,6 +1031,7 @@ int32_t interval_timer_app(void* p) {
     app->field = FieldWork;
     app->cd_field = 0;
     app->phase = PhaseDone;
+    app->pending_signal = -1;
 
     app->queue = furi_message_queue_alloc(8, sizeof(AppEvent));
     app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
@@ -1057,8 +1068,15 @@ int32_t interval_timer_app(void* p) {
                 break;
             }
         }
+        bool stop = app->stop_timer;
+        app->stop_timer = false;
         furi_mutex_release(app->mutex);
 
+        if(stop) {
+            furi_timer_stop(app->timer);
+            keep_awake(app, false);
+        }
+        signal_flush(app);
         view_port_update(app->view_port);
     }
 
