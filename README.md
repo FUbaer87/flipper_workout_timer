@@ -2,7 +2,7 @@
 
 <img src="images/app_icon.png" alt="App icon" width="64">
 
-A training app with a **Countdown / Stopwatch** and an **Interval Timer** (inspired by the Gymboss). The dolphin is original artwork and swaps between two frames every 2 seconds in every mode.
+A training app with a **Countdown / Stopwatch** and an **Interval Timer** (inspired by the Gymboss). The menu dolphin is original artwork and is animated.
 
 ## Features
 
@@ -10,28 +10,32 @@ A training app with a **Countdown / Stopwatch** and an **Interval Timer** (inspi
 |---|---|
 | **Countdown** | Minutes and seconds are set separately. At 00:00 it becomes the **Stopwatch** (counts up, with tenths of a second). |
 | **Interval Timer** | Prep / Work / Rest and rounds (0 = endless). Work and Rest from 2 s to 99 min. |
-| **Alert** | Vibration, Beep or Both. |
+| **Alert** | Vibration, Beep, Both or No (no vibration and no beep; the LED still flashes). |
 | **Volume** | Three bars: no bar = Off, 1 = Low, 2 = Mid, 3 = Loud. |
 
 Settings are saved to the SD card.
 
-## The dolphin (frame A and frame B)
+## Screens
 
-**Menu**
+Large seven-segment digits fill the display. The images below are illustrations of the layout.
 
-![Menu](images/dolphin_menu.png)
+| Countdown setup (active field is dark) | Countdown running |
+|---|---|
+| ![Countdown setup](images/screen_countdown_setup.png) | ![Countdown running](images/screen_countdown_run.png) |
 
-**Countdown / Stopwatch**
+| Stopwatch (tenths on the right) | Time's up (overtime with minus sign) |
+|---|---|
+| ![Stopwatch](images/screen_stopwatch.png) | ![Overtime](images/screen_overtime.png) |
 
-![Countdown](images/dolphin_countdown.png)
+| Interval Timer (paused = dark digits) |
+|---|
+| ![Interval Timer](images/screen_interval.png) |
 
-**Interval Timer: Work (the dolphin trains)**
+## The dolphin
 
-![Work](images/dolphin_work.png)
+The dolphin lives in the main menu and swaps between two frames every 2 seconds.
 
-**Interval Timer: Rest (the dolphin takes a break)**
-
-![Rest](images/dolphin_rest.png)
+![Menu dolphin](images/dolphin_menu.png)
 
 ## Controls
 
@@ -44,7 +48,7 @@ Settings are saved to the SD card.
 **Interval Timer:** Up/Down choose a field, Left/Right change the value (short press = 1, hold to speed up), OK = start.
 - Work and Rest: 2 seconds to 99 minutes (Rest 0 = no break).
 - Rounds: 1 to 99, **0 = Endless**.
-- Run screen: the dolphin on the left (trains during Prep/Work, rests during Rest/Done), the phase at the top right, the remaining time in the middle (dark while paused), the round below it, and the next phase with its duration on the button at the bottom right.
+- Run screen: the phase at the top left, the round at the top right, the remaining time in large digits in the middle (dark while paused) and the next phase with its duration on the button at the bottom right.
 
 **While running:** OK = pause/resume, Right = next phase (interval only), Left = restart the current phase, Back = cancel.
 
@@ -61,4 +65,4 @@ Copy the .fap to `SD Card/apps/Tools/`. Start it under **Apps -> Tools -> Workou
 
 ## Files in the repository
 
-`interval_timer.c`, `dolphin_frames.h` (dolphin frames), `application.fam`, `interval_timer.png` (app icon, required by the build), `images/` (pictures for this README) and `.github/workflows/build.yml`.
+`interval_timer.c`, `dolphin_frames.h` (menu dolphin frames), `application.fam`, `interval_timer.png` (app icon, required by the build), `images/` (pictures for this README) and `.github/workflows/build.yml`.

@@ -42,10 +42,11 @@ typedef enum {
     AlarmVibro,
     AlarmSound,
     AlarmBoth,
+    AlarmNone,
     AlarmCount,
 } AlarmMode;
 
-static const char* alarm_names[AlarmCount] = {"Vibration", "Beep", "Both"};
+static const char* alarm_names[AlarmCount] = {"Vibration", "Beep", "Both", "No"};
 
 typedef enum {
     VolumeOff,
@@ -758,44 +759,98 @@ static void draw_menu(Canvas* canvas, App* app) {
 
 /* ---- Widget look: dolphin on the left, title, two rounded number boxes, button ---- */
 
-/* Small stopwatch glyph (10x10) in front of the title */
-static void draw_clock_glyph(Canvas* canvas, int x, int y) {
-    canvas_draw_circle(canvas, x + 5, y + 6, 4);
-    canvas_draw_line(canvas, x + 4, y, x + 6, y);
-    canvas_draw_line(canvas, x + 5, y + 6, x + 5, y + 3);
-    canvas_draw_line(canvas, x + 5, y + 6, x + 7, y + 7);
+/* ---------- Big seven-segment time display ---------- */
+
+/* segment bits: a=top, b=top right, c=bottom right, d=bottom, e=bottom left, f=top left, g=middle */
+static const uint8_t seg_masks[10] = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f};
+#define SEG_DASH 0x40
+
+static void draw_seg_digit(Canvas* canvas, int x, int y, int w, int h, int t, uint8_t mask) {
+    int half = h / 2;
+    if(mask & 0x01) canvas_draw_box(canvas, x, y, w, t);
+    if(mask & 0x02) canvas_draw_box(canvas, x + w - t, y, t, half + t / 2);
+    if(mask & 0x04) canvas_draw_box(canvas, x + w - t, y + half - t / 2, t, h - half + t / 2);
+    if(mask & 0x08) canvas_draw_box(canvas, x, y + h - t, w, t);
+    if(mask & 0x10) canvas_draw_box(canvas, x, y + half - t / 2, t, h - half + t / 2);
+    if(mask & 0x20) canvas_draw_box(canvas, x, y, t, half + t / 2);
+    if(mask & 0x40) canvas_draw_box(canvas, x, y + half - t / 2, w, t);
 }
 
-static void draw_widget_base(Canvas* canvas, const char* title) {
-    canvas_draw_xbm(canvas, 1, 4, DOLPHIN_BIG_WIDTH, DOLPHIN_BIG_HEIGHT, dolphin_big_frames[anim_frame()]);
+#define BIG_Y 15
+#define BIG_H 32
+#define BIG_T 5
 
-    canvas_set_font(canvas, FontPrimary);
-    int width = canvas_string_width(canvas, title);
-    int x = 77;
-    if(x + width > 127) x = 127 - width;
-    if(x >= 76) draw_clock_glyph(canvas, 64, 13);
-    canvas_draw_str(canvas, x, 22, title);
-}
+typedef enum {
+    DarkNone,
+    DarkMinutes,
+    DarkSeconds,
+    DarkAll,
+} DarkMode;
 
-/* Two digits in a rounded box (x = 64 or 100); an active box is drawn dark */
-static void draw_widget_box(Canvas* canvas, int x, int w, uint32_t value, bool active) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%02lu", (unsigned long)(value > 99 ? 99 : value));
+/* MM:SS in large digits. tenth < 0: no tenths. dashes: show "--:--". minus: sign in front. */
+static void draw_big_time(
+    Canvas* canvas,
+    uint32_t minutes,
+    uint32_t seconds,
+    bool dashes,
+    DarkMode dark,
+    int tenth,
+    bool minus) {
+    const int w = (tenth >= 0) ? 20 : 22;
+    const int gap = 3;
+    const int colon_area = 12;
+    const int pad = 3;
+    int total = 4 * w + 2 * gap + colon_area;
+    if(tenth >= 0) total += 18;
+    int x0 = (128 - total) / 2;
+    int x1 = x0 + w + gap;
+    int cx = x1 + w; /* start of colon area */
+    int x2 = cx + colon_area;
+    int x3 = x2 + w + gap;
+    int pair_w = 2 * w + gap;
 
-    if(active) {
-        canvas_draw_rbox(canvas, x, 27, w, 20, 3);
-        canvas_set_color(canvas, ColorWhite);
-    } else {
-        canvas_draw_rframe(canvas, x, 27, w, 20, 3);
+    if(dark == DarkMinutes || dark == DarkAll) {
+        canvas_draw_rbox(
+            canvas,
+            x0 - pad,
+            BIG_Y - pad,
+            (dark == DarkAll ? total : pair_w) + 2 * pad,
+            BIG_H + 2 * pad,
+            3);
     }
-    canvas_set_font(canvas, FontBigNumbers);
-    canvas_draw_str_aligned(canvas, x + w / 2, 44, AlignCenter, AlignBottom, buf);
-    canvas_set_color(canvas, ColorBlack);
-}
+    if(dark == DarkSeconds) {
+        canvas_draw_rbox(canvas, x2 - pad, BIG_Y - pad, pair_w + 2 * pad, BIG_H + 2 * pad, 3);
+    }
 
-static void draw_widget_colon(Canvas* canvas, int cx) {
-    canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, cx, 36, AlignCenter, AlignCenter, ":");
+    uint8_t digits[4] = {
+        (uint8_t)((minutes / 10) % 10),
+        (uint8_t)(minutes % 10),
+        (uint8_t)((seconds / 10) % 10),
+        (uint8_t)(seconds % 10)};
+    int xs[4] = {x0, x1, x2, x3};
+
+    for(int i = 0; i < 4; i++) {
+        bool in_dark = (dark == DarkAll) || (dark == DarkMinutes && i < 2) ||
+                       (dark == DarkSeconds && i >= 2);
+        canvas_set_color(canvas, in_dark ? ColorWhite : ColorBlack);
+        draw_seg_digit(
+            canvas, xs[i], BIG_Y, w, BIG_H, BIG_T, dashes ? SEG_DASH : seg_masks[digits[i]]);
+    }
+
+    /* colon */
+    canvas_set_color(canvas, dark == DarkAll ? ColorWhite : ColorBlack);
+    canvas_draw_box(canvas, cx + (colon_area - 4) / 2, BIG_Y + 9, 4, 4);
+    canvas_draw_box(canvas, cx + (colon_area - 4) / 2, BIG_Y + BIG_H - 13, 4, 4);
+
+    if(tenth >= 0) {
+        canvas_draw_box(canvas, x3 + w + 2, BIG_Y + BIG_H - 3, 3, 3);
+        draw_seg_digit(canvas, x3 + w + 7, BIG_Y + BIG_H - 20, 11, 20, 3, seg_masks[tenth % 10]);
+    }
+    if(minus) {
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_box(canvas, 2, BIG_Y + BIG_H / 2 - 2, 7, 4);
+    }
+    canvas_set_color(canvas, ColorBlack);
 }
 
 /* Button at the bottom right */
@@ -806,26 +861,6 @@ static void draw_widget_button(Canvas* canvas, const char* text) {
     canvas_set_color(canvas, ColorWhite);
     canvas_draw_str_aligned(canvas, 128 - w / 2, 58, AlignCenter, AlignCenter, text);
     canvas_set_color(canvas, ColorBlack);
-}
-
-/* Small arrows above and below the active box (up = increase, down = decrease) */
-static void draw_widget_arrows(Canvas* canvas, int box_x) {
-    int cx = box_x + 14;
-    canvas_draw_line(canvas, cx - 2, 25, cx + 2, 25);
-    canvas_draw_line(canvas, cx - 1, 24, cx + 1, 24);
-    canvas_draw_dot(canvas, cx, 23);
-    canvas_draw_line(canvas, cx - 2, 49, cx + 2, 49);
-    canvas_draw_line(canvas, cx - 1, 50, cx + 1, 50);
-    canvas_draw_dot(canvas, cx, 51);
-}
-
-static void draw_countdown_setup(Canvas* canvas, App* app) {
-    draw_widget_base(canvas, app->settings.timer == 0 ? "Stopwatch" : "Countdown");
-    draw_widget_box(canvas, 64, 28, app->settings.timer / 60, app->cd_field == 0);
-    draw_widget_colon(canvas, 96);
-    draw_widget_box(canvas, 100, 28, app->settings.timer % 60, app->cd_field == 1);
-    draw_widget_arrows(canvas, app->cd_field == 0 ? 64 : 100);
-    draw_widget_button(canvas, "OK Start");
 }
 
 static void draw_interval_setup(Canvas* canvas, App* app) {
@@ -882,29 +917,43 @@ static void draw_interval_setup(Canvas* canvas, App* app) {
     canvas_draw_str_aligned(canvas, 126, 63, AlignRight, AlignBottom, total);
 }
 
+static void draw_countdown_setup(Canvas* canvas, App* app) {
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(
+        canvas, 64, 0, AlignCenter, AlignTop, app->settings.timer == 0 ? "Stopwatch" : "Countdown");
+    draw_big_time(
+        canvas,
+        app->settings.timer / 60,
+        app->settings.timer % 60,
+        false,
+        app->cd_field == 0 ? DarkMinutes : DarkSeconds,
+        -1,
+        false);
+    draw_widget_button(canvas, "OK Start");
+}
+
 static void draw_run_countdown(Canvas* canvas, App* app) {
     bool done = (app->phase == PhaseDone);
     uint32_t value = done ? app->overtime : app->remaining;
 
-    draw_widget_base(canvas, done ? "Time's up!" : (app->count_up ? "Stopwatch" : "Countdown"));
-    if(app->count_up) {
-        /* narrower boxes leave room for the tenths right of the seconds */
-        char t[8];
-        draw_widget_box(canvas, 57, 26, value / 60, false);
-        draw_widget_colon(canvas, 87);
-        draw_widget_box(canvas, 91, 26, value % 60, false);
-        snprintf(t, sizeof(t), ".%u", (unsigned)(app->tenth % 10));
-        canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 118, 44, t);
-    } else {
-        draw_widget_box(canvas, 64, 28, value / 60, false);
-        draw_widget_colon(canvas, 96);
-        draw_widget_box(canvas, 100, 28, value % 60, false);
-        if(done) canvas_draw_box(canvas, 58, 36, 5, 2); /* minus sign: overtime */
-    }
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(
+        canvas,
+        64,
+        0,
+        AlignCenter,
+        AlignTop,
+        done ? "Time's up!" : (app->count_up ? "Stopwatch" : "Countdown"));
+    draw_big_time(
+        canvas,
+        value / 60,
+        value % 60,
+        false,
+        app->paused ? DarkAll : DarkNone,
+        app->count_up ? (int)(app->tenth % 10) : -1,
+        done);
     draw_widget_button(canvas, done ? "OK Back" : (app->paused ? "OK Resume" : "OK Pause"));
 }
-
 /* Text of the next phase for the button: name and duration */
 static void next_phase_text(const App* app, char* buf, size_t size) {
     bool last = (app->run.rounds != 0 && app->round >= app->run.rounds);
@@ -953,15 +1002,6 @@ static void draw_next_button(Canvas* canvas, const char* text) {
 static void draw_run_interval(Canvas* canvas, App* app) {
     char buf[48];
     bool done = (app->phase == PhaseDone);
-    bool working = (app->phase == PhasePrep || app->phase == PhaseWork);
-
-    canvas_draw_xbm(
-        canvas,
-        1,
-        3,
-        DOLPHIN_ART_WIDTH,
-        DOLPHIN_ART_HEIGHT,
-        working ? dolphin_work_frames[anim_frame()] : dolphin_rest_frames[anim_frame()]);
 
     const char* title = "Done!";
     if(app->phase == PhasePrep) {
@@ -972,23 +1012,7 @@ static void draw_run_interval(Canvas* canvas, App* app) {
         title = "Rest for:";
     }
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 127, 1, AlignRight, AlignTop, title);
-
-    uint32_t shown = done ? total_seconds(&app->run) : app->remaining;
-    if(shown >= 6000) {
-        snprintf(buf, sizeof(buf), "--:--");
-    } else {
-        format_time(buf, sizeof(buf), shown);
-    }
-    if(app->paused) {
-        canvas_draw_rbox(canvas, 62, 14, 66, 26, 3);
-        canvas_set_color(canvas, ColorWhite);
-    } else {
-        canvas_draw_rframe(canvas, 62, 14, 66, 26, 3);
-    }
-    canvas_set_font(canvas, FontBigNumbers);
-    canvas_draw_str_aligned(canvas, 95, 27, AlignCenter, AlignCenter, buf);
-    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_str_aligned(canvas, 2, 0, AlignLeft, AlignTop, title);
 
     if(done || app->phase == PhasePrep) {
         if(app->run.rounds == 0) {
@@ -1002,7 +1026,12 @@ static void draw_run_interval(Canvas* canvas, App* app) {
         snprintf(buf, sizeof(buf), "Round %u/%u", (unsigned)app->round, (unsigned)app->run.rounds);
     }
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, 64, 50, AlignLeft, AlignBottom, buf);
+    canvas_draw_str_aligned(canvas, 126, 8, AlignRight, AlignBottom, buf);
+
+    uint32_t shown = done ? total_seconds(&app->run) : app->remaining;
+    bool too_long = (shown >= 6000);
+    draw_big_time(
+        canvas, shown / 60, shown % 60, too_long, app->paused ? DarkAll : DarkNone, -1, false);
 
     if(done) {
         draw_widget_button(canvas, "OK Back");
