@@ -57,7 +57,6 @@ typedef enum {
     VolumeCount,
 } VolumeLevel;
 
-static const char* volume_names[VolumeCount] = {"Off", "Low", "Mid", "Loud"};
 static const float volume_values[VolumeCount] = {0.0f, 0.5f, 0.75f, 1.0f};
 
 typedef enum {
