@@ -1,64 +1,64 @@
-# Workout Timer für den Flipper Zero
+# Workout Timer for the Flipper Zero
 
-<img src="images/app_icon.png" alt="App-Icon" width="64">
+<img src="images/app_icon.png" alt="App icon" width="64">
 
-Eine Trainings-App mit **Countdown / Stopwatch** und **Interval Timer** (nach dem Vorbild des Gymboss). Die Oberfläche ist komplett auf Englisch. Der Delfin ist eigene Grafik und wechselt in jedem Modus alle 2 Sekunden zwischen zwei Bildern.
+A training app with a **Countdown / Stopwatch** and an **Interval Timer** (inspired by the Gymboss). The dolphin is original artwork and swaps between two frames every 2 seconds in every mode.
 
-## Funktionen
+## Features
 
-| Menüpunkt | Beschreibung |
+| Menu entry | Description |
 |---|---|
-| **Countdown** | Minuten und Sekunden getrennt einstellbar. Bei 00:00 wird daraus die **Stopwatch** (zählt hoch, mit Zehntelsekunden). |
-| **Interval Timer** | Prep / Work / Rest, Runden (0 = endlos). Work und Rest von 2 s bis 99 min. |
-| **Alert** | Vibration, Beep oder Both. |
-| **Volume** | Drei Balken: kein Balken = Off, 1 = Low, 2 = Mid, 3 = Loud. |
+| **Countdown** | Minutes and seconds are set separately. At 00:00 it becomes the **Stopwatch** (counts up, with tenths of a second). |
+| **Interval Timer** | Prep / Work / Rest and rounds (0 = endless). Work and Rest from 2 s to 99 min. |
+| **Alert** | Vibration, Beep or Both. |
+| **Volume** | Three bars: no bar = Off, 1 = Low, 2 = Mid, 3 = Loud. |
 
-Die Einstellungen werden auf der SD-Karte gespeichert.
+Settings are saved to the SD card.
 
-## So sieht der Delfin aus (jeweils Bild A und B)
+## The dolphin (frame A and frame B)
 
-**Menü**
+**Menu**
 
-![Menü](images/dolphin_menu.png)
+![Menu](images/dolphin_menu.png)
 
 **Countdown / Stopwatch**
 
 ![Countdown](images/dolphin_countdown.png)
 
-**Interval Timer: Work (Delfin trainiert)**
+**Interval Timer: Work (the dolphin trains)**
 
 ![Work](images/dolphin_work.png)
 
-**Interval Timer: Rest (Delfin ruht sich aus)**
+**Interval Timer: Rest (the dolphin takes a break)**
 
 ![Rest](images/dolphin_rest.png)
 
-## Bedienung
+## Controls
 
-**Menü:** Hoch/Runter wählen, OK öffnen. Bei „Alert" und „Volume" wechseln Links/Rechts (oder OK) den Wert und spielen ihn zur Probe ab. Zurück beendet die App.
+**Menu:** Up/Down select, OK opens. On "Alert" and "Volume", Left/Right (or OK) change the value and play a preview. Back exits the app.
 
-**Countdown:** Links = Minuten aktiv, Rechts = Sekunden aktiv (das aktive Feld ist dunkel hinterlegt). Hoch = größer, Runter = kleiner (Halten beschleunigt). Die Sekunden laufen über 59 in die nächste Minute. OK = Start.
-- **Abgelaufen:** Der Titel wechselt zu „Time's up!", die Zeit läuft mit **Minuszeichen** weiter (Überzeit bis 99:59) und die rote LED blinkt jede Sekunde. OK oder Zurück beendet.
-- **00:00 eingestellt = Stopwatch:** Titel „Stopwatch", zählt bis 99:59 hoch. Die Zehntelsekunden stehen rechts neben den Sekunden. OK = Pause/Weiter, Links = zurück auf 00:00.
+**Countdown:** Left = minutes active, Right = seconds active (the active field is shown dark). Up = increase, Down = decrease (hold to speed up). Seconds roll over into the next minute. OK = start.
+- **Expired:** the title changes to "Time's up!", the time keeps running with a **minus sign** (overtime up to 99:59) and the red LED blinks every second. OK or Back exits.
+- **Set to 00:00 = Stopwatch:** title "Stopwatch", counts up to 99:59. Tenths of a second are shown to the right of the seconds. OK = pause/resume, Left = reset to 00:00.
 
-**Interval Timer:** Hoch/Runter Feld wählen, Links/Rechts Wert ändern (kurz = 1, Halten beschleunigt), OK = Start.
-- Work und Rest: 2 Sekunden bis 99 Minuten (Rest 0 = keine Pause).
-- Rounds: 1 bis 99, **0 = Endless**.
-- Ansicht beim Ablauf: links der Delfin (trainiert bei Prep/Work, ruht bei Rest/Done), oben rechts die Phase, in der Mitte die Restzeit (dunkel hinterlegt, wenn pausiert), darunter die Runde, unten rechts die nächste Phase mit Dauer.
+**Interval Timer:** Up/Down choose a field, Left/Right change the value (short press = 1, hold to speed up), OK = start.
+- Work and Rest: 2 seconds to 99 minutes (Rest 0 = no break).
+- Rounds: 1 to 99, **0 = Endless**.
+- Run screen: the dolphin on the left (trains during Prep/Work, rests during Rest/Done), the phase at the top right, the remaining time in the middle (dark while paused), the round below it, and the next phase with its duration on the button at the bottom right.
 
-**Während des Ablaufs:** OK = Pause/Weiter, Rechts = nächste Phase (nur Intervall), Links = aktuelle Phase neu starten, Zurück = Abbruch.
+**While running:** OK = pause/resume, Right = next phase (interval only), Left = restart the current phase, Back = cancel.
 
 ## LED
 
-Kurzes Aufblitzen je Phase: blau = Prep, grün = Work, gelb = Rest, türkis = Done. In den letzten drei Sekunden von Countdown und Interval Timer blitzt die LED rot. Nach Ablauf des Countdowns blinkt sie rot im Sekundentakt weiter.
+A short flash per phase: blue = Prep, green = Work, yellow = Rest, cyan = Done. In the last three seconds of the Countdown and the Interval Timer the LED flashes red. After the Countdown has expired it keeps blinking red every second.
 
-## Bauen
+## Building
 
-- `ufbt` im Projektordner erzeugt `dist/interval_timer.fap`, oder
-- per GitHub Actions (`.github/workflows/build.yml`): fertige Datei unter *Actions → Lauf → Artifacts*.
+- Run `ufbt` in the project folder to create `dist/interval_timer.fap`, or
+- use GitHub Actions (`.github/workflows/build.yml`): the finished file is under *Actions -> run -> Artifacts*.
 
-Die .fap nach `SD Card/apps/Tools/` kopieren. Start unter **Apps → Tools → Workout Timer**.
+Copy the .fap to `SD Card/apps/Tools/`. Start it under **Apps -> Tools -> Workout Timer**.
 
-## Dateien im Repository
+## Files in the repository
 
-`interval_timer.c`, `dolphin_frames.h` (Delfin-Bilder), `application.fam`, `interval_timer.png` (App-Icon), `images/` (Bilder für diese README) und `.github/workflows/build.yml`.
+`interval_timer.c`, `dolphin_frames.h` (dolphin frames), `application.fam`, `interval_timer.png` (app icon, required by the build), `images/` (pictures for this README) and `.github/workflows/build.yml`.
