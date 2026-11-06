@@ -18,9 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dolphin_bitmap.h"
-#include "dolphin_big_bitmap.h"
-#include "dolphin_art_bitmaps.h"
+#include "dolphin_frames.h"
 
 #define TAG "WorkoutTimer"
 
@@ -155,6 +153,7 @@ typedef struct {
     uint16_t round;
     bool paused;
     bool release_light;
+    uint16_t overtime;
     uint8_t tenth;
     bool stop_timer;
     int8_t pending_signal;
@@ -440,6 +439,7 @@ static void enter_phase(App* app, Phase phase) {
     app->phase = phase;
     app->paused = false;
     app->tenth = 0;
+    app->overtime = 0;
 
     switch(phase) {
     case PhasePrep:
@@ -537,7 +537,10 @@ static void handle_tick(App* app) {
     if(app->screen != ScreenRun || app->paused) return;
 
     if(app->phase == PhaseDone) {
-        if(app->is_timer) signal_play(app, SigBlink);
+        if(app->is_timer) {
+            if(app->overtime < TIMER_MAX) app->overtime++;
+            signal_play(app, SigBlink);
+        }
         return;
     }
 
@@ -710,6 +713,11 @@ static void handle_input_run(App* app, const InputEvent* event) {
 
 /* ---------- Drawing ---------- */
 
+/* Dolphin animation: the two frames alternate every 2 seconds */
+static uint8_t anim_frame(void) {
+    return (uint8_t)((furi_get_tick() / (furi_kernel_get_tick_frequency() * 2)) & 1);
+}
+
 #define MENU_WIDTH 86
 
 static void draw_menu(Canvas* canvas, App* app) {
@@ -745,7 +753,7 @@ static void draw_menu(Canvas* canvas, App* app) {
         if(selected) canvas_set_color(canvas, ColorBlack);
     }
 
-    canvas_draw_xbm(canvas, 88, 12, DOLPHIN_WIDTH, DOLPHIN_HEIGHT, dolphin_bitmap);
+    canvas_draw_xbm(canvas, 88, 12, DOLPHIN_WIDTH, DOLPHIN_HEIGHT, dolphin_menu_frames[anim_frame()]);
 }
 
 /* ---- Widget look: dolphin on the left, title, two rounded number boxes, button ---- */
@@ -759,7 +767,7 @@ static void draw_clock_glyph(Canvas* canvas, int x, int y) {
 }
 
 static void draw_widget_base(Canvas* canvas, const char* title) {
-    canvas_draw_xbm(canvas, 1, 4, DOLPHIN_BIG_WIDTH, DOLPHIN_BIG_HEIGHT, dolphin_big_bitmap);
+    canvas_draw_xbm(canvas, 1, 4, DOLPHIN_BIG_WIDTH, DOLPHIN_BIG_HEIGHT, dolphin_big_frames[anim_frame()]);
 
     canvas_set_font(canvas, FontPrimary);
     int width = canvas_string_width(canvas, title);
@@ -770,24 +778,24 @@ static void draw_widget_base(Canvas* canvas, const char* title) {
 }
 
 /* Two digits in a rounded box (x = 64 or 100); an active box is drawn dark */
-static void draw_widget_box(Canvas* canvas, int x, uint32_t value, bool active) {
+static void draw_widget_box(Canvas* canvas, int x, int w, uint32_t value, bool active) {
     char buf[8];
     snprintf(buf, sizeof(buf), "%02lu", (unsigned long)(value > 99 ? 99 : value));
 
     if(active) {
-        canvas_draw_rbox(canvas, x, 27, 28, 20, 3);
+        canvas_draw_rbox(canvas, x, 27, w, 20, 3);
         canvas_set_color(canvas, ColorWhite);
     } else {
-        canvas_draw_rframe(canvas, x, 27, 28, 20, 3);
+        canvas_draw_rframe(canvas, x, 27, w, 20, 3);
     }
     canvas_set_font(canvas, FontBigNumbers);
-    canvas_draw_str_aligned(canvas, x + 14, 44, AlignCenter, AlignBottom, buf);
+    canvas_draw_str_aligned(canvas, x + w / 2, 44, AlignCenter, AlignBottom, buf);
     canvas_set_color(canvas, ColorBlack);
 }
 
-static void draw_widget_colon(Canvas* canvas) {
+static void draw_widget_colon(Canvas* canvas, int cx) {
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 96, 36, AlignCenter, AlignCenter, ":");
+    canvas_draw_str_aligned(canvas, cx, 36, AlignCenter, AlignCenter, ":");
 }
 
 /* Button at the bottom right */
@@ -813,9 +821,9 @@ static void draw_widget_arrows(Canvas* canvas, int box_x) {
 
 static void draw_countdown_setup(Canvas* canvas, App* app) {
     draw_widget_base(canvas, app->settings.timer == 0 ? "Stopwatch" : "Countdown");
-    draw_widget_box(canvas, 64, app->settings.timer / 60, app->cd_field == 0);
-    draw_widget_colon(canvas);
-    draw_widget_box(canvas, 100, app->settings.timer % 60, app->cd_field == 1);
+    draw_widget_box(canvas, 64, 28, app->settings.timer / 60, app->cd_field == 0);
+    draw_widget_colon(canvas, 96);
+    draw_widget_box(canvas, 100, 28, app->settings.timer % 60, app->cd_field == 1);
     draw_widget_arrows(canvas, app->cd_field == 0 ? 64 : 100);
     draw_widget_button(canvas, "OK Start");
 }
@@ -876,16 +884,23 @@ static void draw_interval_setup(Canvas* canvas, App* app) {
 
 static void draw_run_countdown(Canvas* canvas, App* app) {
     bool done = (app->phase == PhaseDone);
+    uint32_t value = done ? app->overtime : app->remaining;
 
     draw_widget_base(canvas, done ? "Time's up!" : (app->count_up ? "Stopwatch" : "Countdown"));
-    draw_widget_box(canvas, 64, app->remaining / 60, false);
-    draw_widget_colon(canvas);
-    draw_widget_box(canvas, 100, app->remaining % 60, false);
     if(app->count_up) {
+        /* narrower boxes leave room for the tenths right of the seconds */
         char t[8];
+        draw_widget_box(canvas, 57, 26, value / 60, false);
+        draw_widget_colon(canvas, 87);
+        draw_widget_box(canvas, 91, 26, value % 60, false);
         snprintf(t, sizeof(t), ".%u", (unsigned)(app->tenth % 10));
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 66, 62, t);
+        canvas_draw_str(canvas, 118, 44, t);
+    } else {
+        draw_widget_box(canvas, 64, 28, value / 60, false);
+        draw_widget_colon(canvas, 96);
+        draw_widget_box(canvas, 100, 28, value % 60, false);
+        if(done) canvas_draw_box(canvas, 58, 36, 5, 2); /* minus sign: overtime */
     }
     draw_widget_button(canvas, done ? "OK Back" : (app->paused ? "OK Resume" : "OK Pause"));
 }
@@ -946,7 +961,7 @@ static void draw_run_interval(Canvas* canvas, App* app) {
         3,
         DOLPHIN_ART_WIDTH,
         DOLPHIN_ART_HEIGHT,
-        working ? dolphin_work_bitmap : dolphin_rest_bitmap);
+        working ? dolphin_work_frames[anim_frame()] : dolphin_rest_frames[anim_frame()]);
 
     const char* title = "Done!";
     if(app->phase == PhasePrep) {
@@ -1074,7 +1089,12 @@ int32_t interval_timer_app(void* p) {
 
     AppEvent event;
     while(!app->exit) {
-        if(furi_message_queue_get(app->queue, &event, FuriWaitForever) != FuriStatusOk) continue;
+        FuriStatus got = furi_message_queue_get(app->queue, &event, 500);
+        if(got == FuriStatusErrorTimeout) {
+            view_port_update(app->view_port); /* keeps the animation running */
+            continue;
+        }
+        if(got != FuriStatusOk) continue;
 
         furi_mutex_acquire(app->mutex, FuriWaitForever);
         if(event.type == EventTypeTick) {
