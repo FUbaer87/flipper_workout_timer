@@ -25,7 +25,7 @@
 #define TAG "WorkoutTimer"
 
 #define SETTINGS_PATH  APP_DATA_PATH("settings.bin")
-#define SETTINGS_MAGIC 0x49545634UL
+#define SETTINGS_MAGIC 0x49545635UL
 
 #define PREP_MIN   0
 #define PREP_MAX   60
@@ -51,13 +51,14 @@ static const char* alarm_names[AlarmCount] = {"Vibration", "Beep", "Both"};
 
 typedef enum {
     VolumeOff,
-    VolumeQuiet,
+    VolumeLow,
+    VolumeMid,
     VolumeLoud,
     VolumeCount,
 } VolumeLevel;
 
-static const char* volume_names[VolumeCount] = {"Off", "Quiet", "Loud"};
-static const float volume_values[VolumeCount] = {0.0f, 0.25f, 1.0f};
+static const char* volume_names[VolumeCount] = {"Off", "Low", "Mid", "Loud"};
+static const float volume_values[VolumeCount] = {0.0f, 0.5f, 0.75f, 1.0f};
 
 typedef enum {
     MenuCountdown,
@@ -94,6 +95,7 @@ typedef enum {
     SigWork,
     SigRest,
     SigTick,
+    SigBlink,
     SigDone,
     SigTest,
     SigCount,
@@ -153,6 +155,8 @@ typedef struct {
     uint16_t phase_total;
     uint16_t round;
     bool paused;
+    bool release_light;
+    uint8_t tenth;
     bool stop_timer;
     int8_t pending_signal;
 
@@ -246,6 +250,7 @@ static const NotificationSequence* const signals[SigCount][VARIANT_COUNT] = {
     [SigWork] = {&seq_work_v, &seq_work_s, &seq_work_b, &seq_work_n},
     [SigRest] = {&seq_rest_v, &seq_rest_s, &seq_rest_b, &seq_rest_n},
     [SigTick] = {&seq_tick_v, &seq_tick_s, &seq_tick_b, &seq_tick_n},
+    [SigBlink] = {&seq_tick_n, &seq_tick_n, &seq_tick_n, &seq_tick_n},
     [SigDone] = {&seq_done_v, &seq_done_s, &seq_done_b, &seq_done_n},
     [SigTest] = {&seq_test_v, &seq_test_s, &seq_test_b, &seq_test_n},
 };
@@ -435,6 +440,7 @@ static void change_volume(App* app, int32_t direction) {
 static void enter_phase(App* app, Phase phase) {
     app->phase = phase;
     app->paused = false;
+    app->tenth = 0;
 
     switch(phase) {
     case PhasePrep:
@@ -451,7 +457,8 @@ static void enter_phase(App* app, Phase phase) {
         break;
     case PhaseDone:
         app->remaining = 0;
-        app->stop_timer = true;
+        if(!app->is_timer) app->stop_timer = true; /* countdown keeps ticking for the red blink */
+        app->release_light = true;
         signal_play(app, SigDone);
         break;
     }
@@ -512,7 +519,9 @@ static void start_run(App* app, bool is_timer) {
     }
 
     if(app->phase != PhaseDone) {
-        furi_timer_start(app->timer, furi_kernel_get_tick_frequency());
+        furi_timer_start(
+            app->timer,
+            app->count_up ? furi_kernel_get_tick_frequency() / 10 : furi_kernel_get_tick_frequency());
     }
 }
 
@@ -526,10 +535,20 @@ static void leave_to(App* app, Screen screen) {
 }
 
 static void handle_tick(App* app) {
-    if(app->screen != ScreenRun || app->paused || app->phase == PhaseDone) return;
+    if(app->screen != ScreenRun || app->paused) return;
 
-    if(app->count_up) {
-        if(app->remaining < TIMER_MAX) app->remaining++;
+    if(app->phase == PhaseDone) {
+        if(app->is_timer) signal_play(app, SigBlink);
+        return;
+    }
+
+    if(app->count_up) { /* tick every 100 ms */
+        if(app->remaining < TIMER_MAX) {
+            if(++app->tenth >= 10) {
+                app->tenth = 0;
+                app->remaining++;
+            }
+        }
         return;
     }
 
@@ -677,7 +696,10 @@ static void handle_input_run(App* app, const InputEvent* event) {
         if(app->phase != PhaseDone && !app->is_timer) advance_phase(app);
         break;
     case InputKeyLeft: /* restart the current phase */
-        if(app->phase != PhaseDone) app->remaining = app->phase_total;
+        if(app->phase != PhaseDone) {
+            app->remaining = app->phase_total;
+            app->tenth = 0;
+        }
         break;
     case InputKeyBack:
         leave_to(app, back);
@@ -711,8 +733,15 @@ static void draw_menu(Canvas* canvas, App* app) {
                 canvas, MENU_WIDTH - 3, y + 11, AlignRight, AlignBottom, alarm_names[mode]);
         } else if(i == MenuVolume) {
             uint16_t level = app->settings.volume < VolumeCount ? app->settings.volume : VolumeLoud;
-            canvas_draw_str_aligned(
-                canvas, MENU_WIDTH - 3, y + 11, AlignRight, AlignBottom, volume_names[level]);
+            for(int b = 0; b < 3; b++) {
+                int bx = MENU_WIDTH - 21 + b * 6;
+                int bh = 4 + b * 3;
+                if((int)level > b) {
+                    canvas_draw_box(canvas, bx, y + 11 - bh, 4, bh);
+                } else {
+                    canvas_draw_frame(canvas, bx, y + 11 - bh, 4, bh);
+                }
+            }
         }
         if(selected) canvas_set_color(canvas, ColorBlack);
     }
@@ -762,12 +791,6 @@ static void draw_widget_colon(Canvas* canvas) {
     canvas_draw_str_aligned(canvas, 96, 36, AlignCenter, AlignCenter, ":");
 }
 
-/* Hint line at the top right (small font) */
-static void draw_widget_hint(Canvas* canvas, const char* text) {
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, 127, 9, AlignRight, AlignBottom, text);
-}
-
 /* Button at the bottom right */
 static void draw_widget_button(Canvas* canvas, const char* text) {
     canvas_set_font(canvas, FontSecondary);
@@ -790,12 +813,11 @@ static void draw_widget_arrows(Canvas* canvas, int box_x) {
 }
 
 static void draw_countdown_setup(Canvas* canvas, App* app) {
-    draw_widget_base(canvas, "Countdown");
+    draw_widget_base(canvas, app->settings.timer == 0 ? "Stopwatch" : "Countdown");
     draw_widget_box(canvas, 64, app->settings.timer / 60, app->cd_field == 0);
     draw_widget_colon(canvas);
     draw_widget_box(canvas, 100, app->settings.timer % 60, app->cd_field == 1);
     draw_widget_arrows(canvas, app->cd_field == 0 ? 64 : 100);
-    draw_widget_hint(canvas, app->settings.timer == 0 ? "0 = count up" : "< > min/sec");
     draw_widget_button(canvas, "OK Start");
 }
 
@@ -856,10 +878,16 @@ static void draw_interval_setup(Canvas* canvas, App* app) {
 static void draw_run_countdown(Canvas* canvas, App* app) {
     bool done = (app->phase == PhaseDone);
 
-    draw_widget_base(canvas, done ? "Time's up!" : (app->count_up ? "Count up" : "Countdown"));
+    draw_widget_base(canvas, done ? "Time's up!" : (app->count_up ? "Stopwatch" : "Countdown"));
     draw_widget_box(canvas, 64, app->remaining / 60, false);
     draw_widget_colon(canvas);
     draw_widget_box(canvas, 100, app->remaining % 60, false);
+    if(app->count_up) {
+        char t[8];
+        snprintf(t, sizeof(t), ".%u", (unsigned)(app->tenth % 10));
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 66, 62, t);
+    }
     draw_widget_button(canvas, done ? "OK Back" : (app->paused ? "OK Resume" : "OK Pause"));
 }
 
@@ -1072,10 +1100,10 @@ int32_t interval_timer_app(void* p) {
         app->stop_timer = false;
         furi_mutex_release(app->mutex);
 
-        if(stop) {
-            furi_timer_stop(app->timer);
-            keep_awake(app, false);
-        }
+        bool light = app->release_light;
+        app->release_light = false;
+        if(stop) furi_timer_stop(app->timer);
+        if(light) keep_awake(app, false);
         signal_flush(app);
         view_port_update(app->view_port);
     }
